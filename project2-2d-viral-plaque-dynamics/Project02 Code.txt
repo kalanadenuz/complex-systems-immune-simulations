@@ -1,0 +1,191 @@
+;; =========================================================================
+;; PROJECT 2: 2D VIRAL PROPAGATION & PREDATOR-PREY IMMUNE SWARM DYNAMICS
+;; =========================================================================
+
+breed [ ctls ctl ]
+
+patches-own [
+  cell-state     ; "uninfected", "latent", "infectious", "dead"
+  t-infectious   ; Tick when cell initiates viral release
+  t-dead         ; Tick when cell undergoes apoptosis
+]
+
+ctls-own [
+  ctl-state      ; "naive", "effector"
+  kills-count    ; Track eliminations for clonal proliferation
+  divisions-left ; Finite division limit (Hayflick capacity)
+]
+
+globals [
+  dt             ; Time step (0.1 hours = 6 min)
+  eclipsedur     ; Mean eclipse phase (6.0 h)
+  infectiousdur  ; Mean infectious phase (12.0 h)
+  fluid-virions  ; Extracellular viral concentration (convective spread)
+]
+
+to setup
+  clear-all
+
+  set dt 0.1
+  set eclipsedur 6.0
+  set infectiousdur 12.0
+  set fluid-virions 0
+
+  ;; 1. Initialize Confluent Monolayer of Host Cells (Patches)
+  ask patches [
+    set cell-state "uninfected"
+    set pcolor white
+  ]
+
+  ;; 2. Inoculate with Initial Plaque Forming Units (PFU)
+  ask n-of pfu patches [
+    infect-patch self
+  ]
+
+  ;; 3. Seed Naive Immune Patrol Swarm (Turtles)
+  set-default-shape ctls "circle"
+  create-ctls initial-ctls [
+    set size 1.5
+    set color cyan
+    set ctl-state "naive"
+    set kills-count 0
+    set divisions-left 4
+    setxy random-xcor random-ycor
+  ]
+
+  reset-ticks
+  do-plots
+end
+
+to go
+  propagate-infection-local
+  propagate-infection-fluid
+  update-host-monolayer
+  update-immune-swarm
+  do-plots
+  tick-advance dt
+end
+
+to infect-patch [ target-patch ]
+  let current-time 0
+  carefully [ set current-time ticks ] [ set current-time 0 ]
+
+  ask target-patch [
+    set cell-state "latent"
+    set pcolor green
+    set t-infectious current-time + random-normal eclipsedur (0.1 * eclipsedur)
+    set t-dead t-infectious + random-normal infectiousdur (0.1 * infectiousdur)
+  ]
+end
+
+;; -------------------------------------------------------------------------
+;; Layer 1: Local Cellular Automaton Transmission (Moore Neighborhood)
+;; -------------------------------------------------------------------------
+to propagate-infection-local
+  ask patches with [ cell-state = "infectious" ] [
+    set fluid-virions fluid-virions + 0.04
+
+    let targets neighbors with [ cell-state = "uninfected" ]
+    if any? targets and (random-float 1.0 < transmission-rate) [
+      infect-patch one-of targets
+    ]
+  ]
+end
+
+;; -------------------------------------------------------------------------
+;; Layer 2: Extracellular Convective Transport (Non-Local Jump Infections)
+;; -------------------------------------------------------------------------
+to propagate-infection-fluid
+  if fluid-virions > 1.0 [
+    let candidate one-of patches with [ cell-state = "uninfected" ]
+    if candidate != nobody and (random-float 1.0 < 0.12) [
+      infect-patch candidate
+      set fluid-virions fluid-virions - 1.0
+    ]
+  ]
+  set fluid-virions fluid-virions * 0.985
+end
+
+;; -------------------------------------------------------------------------
+;; Monolayer State Machine Transitions
+;; -------------------------------------------------------------------------
+to update-host-monolayer
+  ask patches with [ cell-state = "latent" ] [
+    if ticks >= t-infectious [
+      set cell-state "infectious"
+      set pcolor red
+    ]
+  ]
+
+  ask patches with [ cell-state = "infectious" ] [
+    if ticks >= t-dead [
+      set cell-state "dead"
+      set pcolor black
+    ]
+  ]
+end
+
+;; -------------------------------------------------------------------------
+;; Swarm Predator-Prey Hunting & Density-Dependent Clonal Proliferation
+;; -------------------------------------------------------------------------
+to update-immune-swarm
+  ask ctls [
+    let local-targets patches in-radius 4 with [ cell-state = "infectious" ]
+
+    ifelse ctl-state = "effector" and any? local-targets [
+      face min-one-of local-targets [ distance myself ]
+      forward 0.8
+    ] [
+      right random 360
+      forward 0.5
+    ]
+
+    if [ cell-state ] of patch-here = "infectious" [
+      ask patch-here [
+        set cell-state "dead"
+        set pcolor black
+      ]
+      set kills-count kills-count + 1
+
+      if ctl-state = "naive" [
+        set ctl-state "effector"
+        set color magenta
+      ]
+
+      if (kills-count mod 3 = 0) and (divisions-left > 0) [
+        set divisions-left divisions-left - 1
+        hatch 1 [
+          set kills-count 0
+          set divisions-left [ divisions-left ] of myself
+        ]
+      ]
+    ]
+
+    if kills-count >= 15 [
+      die
+    ]
+  ]
+end
+
+;; -------------------------------------------------------------------------
+;; Dedicated Real-Time Plot Procedure
+;; -------------------------------------------------------------------------
+to do-plots
+  ;; Plot 1: Monolayer Cell States
+  set-current-plot "Cell Culture States"
+  set-current-plot-pen "Uninfected"
+  plot count patches with [ cell-state = "uninfected" ]
+  set-current-plot-pen "Latent"
+  plot count patches with [ cell-state = "latent" ]
+  set-current-plot-pen "Infectious"
+  plot count patches with [ cell-state = "infectious" ]
+  set-current-plot-pen "Dead"
+  plot count patches with [ cell-state = "dead" ]
+
+  ;; Plot 2: Immune Swarm Dynamics
+  set-current-plot "Immune Swarm Dynamics"
+  set-current-plot-pen "Naive CTLs"
+  plot count ctls with [ ctl-state = "naive" ]
+  set-current-plot-pen "Effector CTLs"
+  plot count ctls with [ ctl-state = "effector" ]
+end

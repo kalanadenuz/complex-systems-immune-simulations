@@ -1,0 +1,194 @@
+;; =========================================================================
+;; PROJECT 1: 3D LYMPH NODE SWARM INTELLIGENCE & STIGMERGIC CHEMOTAXIS
+;; =========================================================================
+
+breed [ tcells tcell ]
+breed [ dcs dc ]
+
+tcells-own [
+  state          ; "searching", "bound", "activated"
+  t-bound        ; Remaining duration of current immunological synapse
+  activation-lvl ; Cumulative antigen exposure
+]
+
+dcs-own [
+  dc-id
+]
+
+patches-own [
+  chemokine      ; Stigmergic chemical field concentration
+]
+
+globals [
+  dt               ; Duration of one step in min (0.5 min)
+  ds               ; Patch spatial scale (8 um/patch)
+  tcell-step       ; Movement step size per tick
+  total-synapses   ; Cumulative count of DC-T cell interactions
+  active-count     ; Count of primed effector T-cells (for plot)
+  max-chem         ; Maximum chemokine concentration (for plot)
+  target-activated ; Target number to end simulation (100% of tcell-count)
+]
+
+to setup
+  clear-all
+
+  ;; Physical spatial and temporal parameters
+  set dt 0.5
+  set ds 8
+  set tcell-step (16 / ds) * dt   ; 16 um/min converted to patches/tick
+  set total-synapses 0
+  set active-count 0
+  set max-chem 0
+  set target-activated tcell-count ; Stops when 100% of T-cells are activated
+
+  ;; 1. Initialize 3D space: pure black background and zero chemical field
+  ask patches [
+    set pcolor black
+    set chemokine 0
+  ]
+
+  ;; 2. Initialize Dendritic Cells (Signaling beacons / Antigen hubs)
+  set-default-shape dcs "circle"
+  create-dcs 2 [
+    set size 2.5
+    set color red
+    setxyz random-xcor random-ycor random-zcor
+  ]
+
+  ;; 3. Initialize T Cell Swarm Agents
+  set-default-shape tcells "circle"
+  create-tcells tcell-count [
+    set size 1.0
+    set color green
+    set state "searching"
+    set t-bound 0
+    set activation-lvl 0
+    setxyz random-xcor random-ycor random-zcor
+  ]
+
+  update-stats
+  do-plots
+  reset-ticks
+end
+
+to go
+  ;; TERMINATION CHECK: Stop as soon as 100% reach activated state
+  if count tcells with [ state = "activated" ] >= target-activated [
+    ;; Force clean visual resolution on completion
+    ask tcells with [ state != "activated" ] [
+      set state "activated"
+      set color yellow
+    ]
+    ask links [ die ]
+
+    update-stats
+    do-plots
+    print (word "Simulation Complete: All " count tcells " T-cells 100% primed in " ticks " minutes.")
+    stop
+  ]
+
+  evaporate-and-diffuse-chemokines
+  emit-dc-signals
+  update-tcell-swarm
+  update-stats
+  do-plots
+  tick-advance dt
+end
+
+;; -------------------------------------------------------------------------
+;; Swarm Environment Dynamics: Stigmergy, 3D Diffusion, & Evaporation
+;; -------------------------------------------------------------------------
+to evaporate-and-diffuse-chemokines
+  ;; Diffuse chemokine across 3D neighbors
+  diffuse chemokine 0.25
+  ;; Enzymatic breakdown / signal evaporation
+  ask patches [
+    set chemokine chemokine * 0.94
+  ]
+end
+
+to emit-dc-signals
+  ;; DCs continuously deposit signaling molecules into their 3D patch
+  ask dcs [
+    ask patch-here [
+      set chemokine chemokine + chemokine-emission
+    ]
+  ]
+end
+
+;; -------------------------------------------------------------------------
+;; Swarm Agent Dynamics: Gradient Ascent, Synapse Binding & Differentiation
+;; -------------------------------------------------------------------------
+to update-tcell-swarm
+  ask tcells [
+    ;; STATE 1: SEARCHING (Chemotaxis vs Brownian Exploratory Walk)
+    if state = "searching" [
+      let strong-patch max-one-of neighbors [ chemokine ]
+
+      ifelse (random-float 1.0 < chemotaxis-bias) and ([chemokine] of strong-patch > 0.05) [
+        face strong-patch
+        right random-normal 0 15
+        roll-right random-normal 0 15
+      ] [
+        right random-normal 0 45
+        roll-right random-normal 0 45
+      ]
+      forward tcell-step
+
+      ;; Detect Dendritic Cells within 2 patches (16 um radius)
+      let target-dc one-of dcs in-radius 2
+      if target-dc != nobody [
+        set state "bound"
+        set color blue
+        set t-bound 3.0   ; 3-minute physical contact duration
+        create-link-with target-dc [
+          set color red
+        ]
+        set total-synapses total-synapses + 1
+      ]
+    ]
+
+    ;; STATE 2: IMMUNOLOGICAL SYNAPSE (Information Exchange & Activation)
+    if state = "bound" [
+      set t-bound t-bound - dt
+      set activation-lvl activation-lvl + dt
+
+      if t-bound <= 0 [
+        ask my-links [ die ]
+        ifelse activation-lvl >= 6.0 [
+          set state "activated"
+          set color yellow   ; Differentiated effector cell
+        ] [
+          set state "searching"
+          set color green
+        ]
+      ]
+    ]
+
+    ;; STATE 3: PRIMED EFFECTOR (Swarm Egress Behavior)
+    if state = "activated" [
+      right random-normal 0 15
+      roll-right random-normal 0 15
+      forward (tcell-step * 1.6)
+    ]
+  ]
+end
+
+to update-stats
+  set active-count count tcells with [ state = "activated" ]
+  set max-chem precision (max [chemokine] of patches) 2
+end
+
+to do-plots
+  ;; Live Plot 1: Swarm Dynamics
+  set-current-plot "Swarm Dynamics"
+  set-current-plot-pen "Synapses"
+  plot total-synapses
+  set-current-plot-pen "Primed Effectors"
+  plot active-count
+
+  ;; Live Plot 2: Chemokine Field Concentration
+  set-current-plot "Chemokine Concentration"
+  set-current-plot-pen "Max Chemokine"
+  plot max-chem
+end
